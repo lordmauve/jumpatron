@@ -13,8 +13,10 @@ SPEED = 301
 
 
 class Char:
-    def __init__(self, base, pos):
+    def __init__(self, base, slot):
         self.base = base
+        self.slot = slot
+        pos = (slots[slot], floor)
         self.sprite = main_layer.add_sprite(
             f'{self.base}_walk1',
             pos=pos,
@@ -25,7 +27,21 @@ class Char:
         self.vy = 0
         self.can_jump = True
         self.jump_sound = w2d.sounds.load(f'{self.base}_jump')
+
+        self.create_badge()
         w2d.clock.coro.run(self.animate())
+
+    def create_badge(self):
+        x = round((self.slot + 1) * scene.width / 5)
+        scene.layers[10].add_sprite(
+            f'{self.base}_badge2',
+            pos=(x, 40)
+        )
+        self.score = scene.layers[10].add_label(
+            0,
+            pos=(x + 30, 55),
+            fontsize=40
+        )
 
     def __repr__(self):
         return f'Char({self.base!r})'
@@ -56,7 +72,6 @@ class Char:
         self.sprite.image = f'{self.base}_{name}'
 
     async def spin(self):
-        self.can_spin = False
         self.set_sprite('duck')
         self.sprite.anchor_y = 'center'
         await w2d.animate(self.sprite, 'accel_decel', duration=0.33, angle=-math.tau)
@@ -64,7 +79,6 @@ class Char:
         self.sprite.angle = 0
         await w2d.clock.coro.sleep(0.1)
         self.sprite.image = f'{self.base}_jump'
-        self.can_spin = True
 
     def jump(self):
         if self.can_jump:
@@ -74,12 +88,14 @@ class Char:
             self.sprite.image = f'{self.base}_jump'
             self.jump_sound.play()
         elif self.can_spin:
-            self.vy -= 400
+            self.vy = -1200
             self.sprite.y -= 20
+            self.can_spin = False
             w2d.clock.coro.run(self.spin())
             self.jump_sound.play()
 
     def hit(self):
+        w2d.sounds.pain.play()
         self.can_jump = self.can_spin = False
         self.was_hit = True
         self.set_sprite('hurt')
@@ -103,10 +119,11 @@ class Grass:
                 sprite.x = (i * self.tile_size - off) % (self.tile_size * len(self.sprites)) - self.tile_size
 
 
-async def play_obstacle():
-    sprite_name = random.choice(
-        ['wall', 'crate', 'sign', 'fence'],
-    )
+async def play_obstacle(sprite_name=None):
+    if sprite_name is None:
+        sprite_name = random.choice(
+            ['wall', 'crate', 'sign', 'fence', 'cactus', 'rock'],
+        )
     sprite = main_layer.add_sprite(
         sprite_name,
         pos=(scene.width + 100, floor),
@@ -146,25 +163,72 @@ async def play_obstacle():
 
 slots = [scene.width // 12 * i for i in range(1, 5)]
 
-red = Char('alienpink', (slots[0], floor))
-yellow = Char('alienyellow', (slots[1], floor))
-blue = Char('alienblue', (slots[2], floor))
-green = Char('aliengreen', (slots[3], floor))
+red = Char('alienpink', 0)
+yellow = Char('alienyellow', 1)
+blue = Char('alienblue', 2)
+green = Char('aliengreen', 3)
 
 chars = [
     blue, green, red, yellow
 ]
-for c, slot in zip(chars, slots):
-    c.slot = slot
 
 Grass()
 
 
+async def play_collectible():
+    # sprite_name = random.choice(
+    #     ['wall', 'crate', 'sign', 'fence', 'cactus', 'rock'],
+    # )
+    sprite_name = 'gem'
+    height = random.choice([floor - 20, floor - 280, floor - 440])
+    sprite = main_layer.add_sprite(
+        sprite_name,
+        pos=(scene.width + 100, height),
+        anchor_y='bottom'
+    )
+    start = scene.width + 100
+    async for t in w2d.clock.coro.frames():
+        x = start - round(SPEED * t)
+        sprite.x = x
+        if sprite.bounds.right < 0:
+            break
+
+        for c in chars:
+            try:
+                bounds = c.sprite.bounds
+            except TypeError:
+                continue
+            if not c.was_hit and bounds.colliderect(sprite.bounds):
+                c.score.text += 1
+                w2d.sounds.pickup.play()
+                break
+        else:
+            continue
+        break
+
+    sprite.delete()
+
+
 async def spawn_obstacles():
-    while True:
-        w2d.clock.coro.run(play_obstacle())
-        interval = random.uniform(2.5, 5)
+    end = w2d.clock.default_clock.t + 120
+    while w2d.clock.default_clock.t < end:
+        f = random.choice([play_obstacle, play_collectible])
+        w2d.clock.coro.run(f())
+        interval = random.uniform(1, 2)
         await w2d.clock.coro.sleep(interval)
+    await play_obstacle('flag')
+
+    winner = max(chars, key=lambda c: c.score.text)
+    if sum(c.score.text == winner.score.text for c in chars) > 1:
+        text = "Tie!"
+    else:
+        text = f"{winner.base} wins!"
+    scene.layers[10].add_label(
+        text,
+        pos=(scene.width / 2, scene.height / 2),
+        fontsize=50,
+        align="center"
+    )
 
 w2d.clock.coro.run(spawn_obstacles())
 
